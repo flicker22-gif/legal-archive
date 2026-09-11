@@ -1,8 +1,9 @@
 # 案件归档检索系统
 
-律所纸质卷宗电子化：秘书按案件录入当事人、案由、承办律师并上传卷宗 PDF，
-系统自动抽取 PDF 正文、建立中文全文索引；律师可跨案件按关键词全文检索，
-查看带高亮的命中摘要，并一键预览原卷对应页码。
+律所纸质卷宗电子化：秘书按案件录入当事人、案由、承办律师，建立自定义**卷宗目录**
+（默认：诉讼文书 / 证据材料 / 裁判文书，可新建、改名、排序、删除）并把卷宗 PDF
+归入目录；系统自动抽取 PDF 正文、建立中文全文索引；律师可跨案件/按目录按关键词
+全文检索，查看带高亮的命中摘要，并一键预览原卷对应页码。
 
 ## 技术栈
 
@@ -22,11 +23,14 @@
 │   ├── app/
 │   │   ├── main.py             入口、CORS、建表
 │   │   ├── db.py               连接池、表结构（cases/documents/document_pages）
+│   │   ├── models.py             Pydantic 模型
 │   │   ├── search.py           bigram 索引/查询构造、高亮摘要
 │   │   ├── pdf_service.py      PDF 落盘、逐页抽取、写 tsvector
+│   │   ├── storage.py          磁盘文件清理
 │   │   ├── routers_cases.py    案件录入/列表/详情/删除
-│   │   ├── routers_documents.py 卷宗上传/状态/预览/下载/删除
-│   │   └── routers_search.py   全文检索（分页、按案件过滤、相关度排序）
+│   │   ├── routers_folders.py  卷宗目录增删改/排序
+│   │   ├── routers_documents.py 卷宗上传/移动/状态/预览/下载/删除
+│   │   └── routers_search.py   全文检索（分页、按案件/目录过滤、相关度排序）
 │   ├── seed_demo.py        演示案件 + 中文 PDF 生成/入库
 │   └── smoke_test.py       端到端接口自测
 ├── frontend/               Next.js 前端
@@ -76,30 +80,37 @@ cd ../frontend && npm install && npm run dev
 ## 使用流程
 
 1. **录入案件**：首页「＋ 录入案件」填写案件名称、案号、案由、当事人（可多行）、
-   承办律师。
-2. **上传卷宗**：进入案件详情，将 PDF 拖入上传区（可多份）。
-   后端异步逐页抽取文本、构造 bigram 索引并写入 `tsvector`，页面自动轮询
-   `处理中 → 可检索` 状态；扫描件等无文本层 PDF 会标记「索引失败」。
-3. **全文检索**：
-   - 顶部「全文检索」跨所有案件检索；案件详情页可只在本案内检索。
+   承办律师。保存后系统自动建立三个默认目录：**诉讼文书 / 证据材料 / 裁判文书**。
+2. **整理卷宗目录**：案件详情左侧目录栏可新建自定义目录（如「庭审笔录」「往来函件」）、
+   改名、↑↓ 调整顺序、删除（删除目录不会删除卷宗，其内卷宗自动回到「未分类」）。
+3. **上传卷宗**：先在目录栏选中目标目录，再将 PDF 拖入上传区（可多份），文件即归入该目录；
+   也可在每份卷宗右侧的下拉框中随时移动目录。后端异步逐页抽取文本、构造 bigram 索引，
+   页面自动轮询 `处理中 → 可检索`；扫描件等无文本层 PDF 会标记「索引失败」。
+4. **全文检索**：
+   - 顶部「全文检索」跨所有案件检索，结果带目录标签；案件详情页可只在本案、
+     甚至当前选中目录内检索。
    - 多关键词为 AND（如 `被告 租金`）；结果按 `ts_rank_cd` 相关度排序、分页。
-   - 每条结果给出案件、卷宗、页码与 `<mark>` 高亮摘要，点「预览原卷第 N 页」
+   - 每条结果给出案件、目录、卷宗、页码与 `<mark>` 高亮摘要，点「预览原卷第 N 页」
      在浏览器 PDF 查看器中直接定位到该页。
 
 ## 主要 API
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/cases` | 录入案件 |
+| POST | `/api/cases` | 录入案件（同时建默认目录） |
 | GET | `/api/cases?q=&page=` | 案件列表（按案号/名称/当事人/律师/案由筛选） |
-| GET | `/api/cases/{id}` | 案件详情（含卷宗列表） |
-| PUT/DELETE | `/api/cases/{id}` | 修改 / 删除（连带卷宗与文件） |
-| POST | `/api/cases/{id}/documents` | 上传 PDF（multipart，≤50MB，后台索引） |
+| GET | `/api/cases/{id}` | 案件详情（含 folders 及卷宗的目录归属） |
+| PUT/DELETE | `/api/cases/{id}` | 修改 / 删除（连带目录、卷宗、索引与文件） |
+| POST | `/api/cases/{id}/folders` | 新建目录 |
+| PUT/DELETE | `/api/cases/{id}/folders/{fid}` | 改名 / 删除（卷宗回未分类） |
+| POST | `/api/cases/{id}/folders/reorder` | 按传入 id 顺序重排目录 |
+| POST | `/api/cases/{id}/documents` | 上传 PDF（multipart 字段 file + 可选 folder_id，≤50MB） |
+| PATCH | `/api/cases/{id}/documents/{doc}/move` | 移动卷宗到目录（folder_id=null=未分类） |
 | GET | `/api/cases/{id}/documents/{doc}/status` | 索引状态轮询 |
 | GET | `/api/cases/{id}/documents/{doc}/preview` | 内联 PDF（支持 `#page=N`） |
 | GET | `/api/cases/{id}/documents/{doc}/download` | 下载 PDF |
 | DELETE | `/api/cases/{id}/documents/{doc}` | 删除卷宗 |
-| GET | `/api/search?q=&case_id=&page=` | 全文检索 |
+| GET | `/api/search?q=&case_id=&folder_id=&page=` | 全文检索（folder_id=0 表示未分类） |
 
 自测：`cd backend && .venv/bin/python smoke_test.py`
 
@@ -124,11 +135,16 @@ PostgreSQL 自带分词器不能切分中文；纯 jieba 词典分词对「塔�
 
 ```text
 cases(id, case_no, title, cause, parties, lawyer, remark, created_at)
-documents(id, case_id→cases, filename, stored_name, page_count, size_bytes,
+folders(id, case_id→cases, name, position, created_at)  UNIQUE(case_id,name)
+documents(id, case_id→cases, folder_id→folders[ON DELETE SET NULL],
+          filename, stored_name, page_count, size_bytes,
           status[processing|indexed|failed], error, uploaded_at, indexed_at)
 document_pages(id, document_id→documents, page_no, raw_text, tsv TSVECTOR)
               UNIQUE(document_id,page_no);  GIN(tsv)
 ```
+
+每个案件建档时自动创建默认目录 诉讼文书/证据材料/裁判文书（position 0–2）；
+卷宗可不属于任何目录（folder_id 为 NULL，界面显示「未分类」）。
 
 PDF 实体文件保存在 `backend/storage/<每千个文档分桶>/<uuid>_<原名>`。
 

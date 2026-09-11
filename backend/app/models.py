@@ -24,14 +24,25 @@ class CaseOut(BaseModel):
     created_at: datetime
 
 
-class CaseDetail(CaseOut):
-    documents: list["DocumentOut"] = []
+class FolderIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="目录名称")
+
+
+class FolderOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    case_id: int
+    name: str
+    position: int
+    doc_count: int = 0
 
 
 class DocumentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     case_id: int
+    folder_id: int | None = None
+    folder_name: str | None = None
     filename: str
     page_count: int
     size_bytes: int
@@ -41,11 +52,22 @@ class DocumentOut(BaseModel):
     indexed_at: datetime | None
 
 
+class MoveDocumentIn(BaseModel):
+    folder_id: int | None = Field(None, description="目标目录，null=未分类")
+
+
+class CaseDetail(CaseOut):
+    folders: list[FolderOut] = []
+    documents: list[DocumentOut] = []
+
+
 class PageHit(BaseModel):
     document_id: int
     case_id: int
     case_no: str | None
     case_title: str
+    folder_id: int | None = None
+    folder_name: str | None = None
     filename: str
     page_no: int
     snippet: str

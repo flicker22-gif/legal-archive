@@ -1,4 +1,12 @@
 // 后端 API 类型与请求封装
+export interface FolderItem {
+  id: number;
+  case_id: number;
+  name: string;
+  position: number;
+  doc_count: number;
+}
+
 export interface CaseItem {
   id: number;
   case_no: string | null;
@@ -13,6 +21,8 @@ export interface CaseItem {
 export interface DocumentItem {
   id: number;
   case_id: number;
+  folder_id: number | null;
+  folder_name: string | null;
   filename: string;
   page_count: number;
   size_bytes: number;
@@ -23,6 +33,7 @@ export interface DocumentItem {
 }
 
 export interface CaseDetail extends CaseItem {
+  folders: FolderItem[];
   documents: DocumentItem[];
 }
 
@@ -38,6 +49,8 @@ export interface SearchHit {
   case_id: number;
   case_no: string | null;
   case_title: string;
+  folder_id: number | null;
+  folder_name: string | null;
   filename: string;
   page_no: number;
   snippet: string;
@@ -91,17 +104,49 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  search: (params: { q: string; caseId?: number; page?: number }) => {
+
+  // ---- 目录 ----
+  createFolder: (caseId: number, name: string) =>
+    request<FolderItem>(`/api/cases/${caseId}/folders`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  renameFolder: (caseId: number, folderId: number, name: string) =>
+    request<FolderItem>(`/api/cases/${caseId}/folders/${folderId}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    }),
+  deleteFolder: (caseId: number, folderId: number) =>
+    request<void>(`/api/cases/${caseId}/folders/${folderId}`, {
+      method: "DELETE",
+    }),
+  reorderFolders: (caseId: number, folderIds: number[]) =>
+    request<FolderItem[]>(`/api/cases/${caseId}/folders/reorder`, {
+      method: "POST",
+      body: JSON.stringify(folderIds),
+    }),
+
+  search: (params: {
+    q: string;
+    caseId?: number;
+    folderId?: number | null;
+    page?: number;
+  }) => {
     const sp = new URLSearchParams({
       q: params.q,
       page: String(params.page ?? 1),
     });
     if (params.caseId) sp.set("case_id", String(params.caseId));
+    if (params.folderId !== undefined && params.folderId !== null)
+      sp.set("folder_id", String(params.folderId));
     return request<SearchResponse>(`/api/search?${sp.toString()}`);
   },
-  uploadPdf: (caseId: number, file: File) => {
+
+  uploadPdf: (caseId: number, file: File, folderId?: number | null) => {
     const fd = new FormData();
     fd.append("file", file);
+    if (folderId !== undefined && folderId !== null)
+      fd.append("folder_id", String(folderId));
     return fetch(`/api/cases/${caseId}/documents`, {
       method: "POST",
       body: fd,
@@ -113,6 +158,18 @@ export const api = {
       return r.json() as Promise<DocumentItem>;
     });
   },
+  moveDocument: (
+    caseId: number,
+    docId: number,
+    folderId: number | null
+  ) =>
+    request<DocumentItem>(
+      `/api/cases/${caseId}/documents/${docId}/move`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ folder_id: folderId }),
+      }
+    ),
   deleteDocument: (caseId: number, docId: number) =>
     request<void>(`/api/cases/${caseId}/documents/${docId}`, {
       method: "DELETE",
@@ -123,7 +180,11 @@ export const api = {
     ),
 };
 
-export function previewUrl(caseId: number, docId: number, page?: number) {
+export function previewUrl(
+  caseId: number,
+  docId: number,
+  page?: number
+) {
   const hash = page ? `#page=${page}` : "";
   return `/api/cases/${caseId}/documents/${docId}/preview${hash}`;
 }

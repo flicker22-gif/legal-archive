@@ -12,15 +12,18 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 # 查询词已构造为 bigram AND（见 search.py），直接交给 to_tsquery
 SEARCH_SQL = """
     SELECT dp.document_id, dp.page_no, dp.raw_text,
-           d.case_id, c.case_no, c.title      AS case_title,
+           d.case_id, d.folder_id, f.name AS folder_name,
+           c.case_no, c.title      AS case_title,
            d.filename,
            ts_rank_cd(dp.tsv, to_tsquery('simple', %(tsq)s)) AS rank
       FROM document_pages dp
       JOIN documents d ON d.id = dp.document_id
       JOIN cases c     ON c.id = d.case_id
+      LEFT JOIN folders f ON f.id = d.folder_id
      WHERE d.status = 'indexed'
        AND dp.tsv @@ to_tsquery('simple', %(tsq)s)
        {case_filter}
+       {folder_filter}
      ORDER BY rank DESC, dp.document_id, dp.page_no
      LIMIT %(limit)s OFFSET %(offset)s
 """
@@ -32,6 +35,7 @@ COUNT_SQL = """
      WHERE d.status = 'indexed'
        AND dp.tsv @@ to_tsquery('simple', %(tsq)s)
        {case_filter}
+       {folder_filter}
 """
 
 
@@ -39,6 +43,7 @@ COUNT_SQL = """
 def search(
     q: str = Query(..., min_length=1, description="检索关键词，多段空格分隔为 AND"),
     case_id: int | None = Query(None, description="限定案件范围"),
+    folder_id: int | None = Query(None, description="限定目录范围，0=未分类"),
     page: int = Query(1, ge=1),
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
 ) -> SearchResponse:
@@ -46,10 +51,19 @@ def search(
     if not tsq:
         return SearchResponse(q=q, page=page, page_size=page_size, total=0, hits=[])
 
+    # folder_id=0 约定为“未分类”（NULL）
     case_filter = "AND d.case_id = %(case_id)s" if case_id else ""
+    if folder_id is None:
+        folder_filter = ""
+    elif folder_id == 0:
+        folder_filter = "AND d.folder_id IS NULL"
+    else:
+        folder_filter = "AND d.folder_id = %(folder_id)s"
+
     params = {
         "tsq": tsq,
         "case_id": case_id,
+        "folder_id": folder_id,
         "limit": page_size,
         "offset": (page - 1) * page_size,
     }
@@ -60,10 +74,12 @@ def search(
                                         (case_id,)).fetchone():
             raise HTTPException(404, "案件不存在")
         total = conn.execute(
-            COUNT_SQL.format(case_filter=case_filter), params
+            COUNT_SQL.format(case_filter=case_filter, folder_filter=folder_filter),
+            params,
         ).fetchone()["n"]
         rows = conn.execute(
-            SEARCH_SQL.format(case_filter=case_filter), params
+            SEARCH_SQL.format(case_filter=case_filter, folder_filter=folder_filter),
+            params,
         ).fetchall()
 
     terms = highlight_terms(q)
@@ -73,6 +89,8 @@ def search(
             case_id=r["case_id"],
             case_no=r["case_no"],
             case_title=r["case_title"],
+            folder_id=r["folder_id"],
+            folder_name=r["folder_name"],
             filename=r["filename"],
             page_no=r["page_no"],
             snippet=make_snippet(r["raw_text"], terms, radius=SNIPPET_RADIUS),

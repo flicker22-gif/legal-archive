@@ -1,4 +1,4 @@
-"""生成中文演示卷宗 PDF 并入库（可重复执行，会清空重建演示案件）。
+"""生成中文演示卷宗 PDF 并按目录入库（可重复执行，会清空重建演示案件）。
 
 用法: backend/.venv/bin/python seed_demo.py
 依赖: reportlab（使用内置 CID 字体 STSong-Light，无需外部中文字体文件）
@@ -12,9 +12,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
-from app.db import init_pool, init_schema, pool
-from app.pdf_service import save_pdf_then_index
 from app.config import STORAGE_DIR
+from app.db import DEFAULT_FOLDERS, init_pool, init_schema, pool
+from app.pdf_service import save_pdf_then_index
 
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
@@ -28,7 +28,7 @@ PLAIN = ParagraphStyle("PLAIN", fontName="STSong-Light", fontSize=11.5, leading=
 
 
 def build_pdf(blocks: list[tuple[str, str]]) -> bytes:
-    """blocks: (style, text) — style ∈ title/h2/body/plain/pagebreak"""
+    """blocks: (style, text) — style ∈ title/h2/body/plain/pagebreak/spacer"""
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=56, bottomMargin=46,
                             leftMargin=54, rightMargin=54, title="卷宗")
@@ -47,9 +47,9 @@ def build_pdf(blocks: list[tuple[str, str]]) -> bytes:
     return buf.getvalue()
 
 
-# ---------------------------- 演示卷宗内容 ----------------------------
+# ---------------------------- 各份卷宗内容 ----------------------------
 
-QISUZHUANG = [
+QISU = [
     ("title", "民事起诉状"),
     ("plain", "原告：张伟，男，汉族，1978年5月12日出生，住北京市朝阳区建国路88号。"),
     ("plain", "被告：李伟，男，汉族，1980年9月3日出生，住北京市海淀区中关村南大街15号。"),
@@ -62,21 +62,20 @@ QISUZHUANG = [
     ("body", "2023年3月1日，原告张伟与被告李伟签订《房屋租赁合同》，"
              "约定原告将位于朝阳区建国路88号的办公用房出租给被告，"
              "月租金人民币贰万壹仟元，按月支付，租期五年。"),
-    ("body", "合同履行初期，被告尚能按时支付租金。自2025年10月起，"
-             "被告以经营困难为由开始拖欠租金，经原告多次书面催告仍拒不支付。"
-             "截至2026年6月30日，被告累计拖欠租金达六个月，共计人民币壹拾贰万陆仟元。"),
+    ("body", "自2025年10月起，被告以经营困难为由开始拖欠租金，"
+             "经原告多次书面催告仍拒不支付。截至2026年6月30日，"
+             "被告累计拖欠租金达六个月，共计人民币壹拾贰万陆仟元。"),
     ("body", "根据合同第十二条约定，承租方逾期支付租金超过三十日的，"
              "出租方有权解除合同并要求承租方支付相当于两个月租金的违约金。"
-             "被告的违约行为严重损害了原告的合法权益。"),
-    ("body", "综上所述，为维护原告合法权益，依据《中华人民共和国民法典》"
-             "第五百六十三条、第七百二十二条之规定，特向贵院提起诉讼，恳请依法判决。"),
+             "依据《中华人民共和国民法典》第五百六十三条、第七百二十二条之规定，"
+             "特向贵院提起诉讼，恳请依法判决。"),
     ("spacer", "20"),
-    ("plain", "此致"),
-    ("plain", "北京市朝阳区人民法院"),
+    ("plain", "此致  北京市朝阳区人民法院"),
     ("spacer", "24"),
-    ("plain", "具状人：张伟"),
-    ("plain", "2026年7月5日"),
-    ("pagebreak", ""),
+    ("plain", "具状人：张伟        2026年7月5日"),
+]
+
+ZHENGJU = [
     ("title", "证据目录"),
     ("h2", "证据一：《房屋租赁合同》"),
     ("body", "证明目的：证明原、被告之间存在房屋租赁合同关系，"
@@ -91,21 +90,42 @@ QISUZHUANG = [
              "历史租金支付标准为每月人民币贰万壹仟元。"),
     ("h2", "证据五：微信聊天记录公证书"),
     ("body", "证明目的：证明被告承认拖欠租金事实并多次承诺还款但均未兑现。"),
-    ("pagebreak", ""),
+]
+
+DAILI = [
     ("title", "代理词"),
-    ("body", "审判长、审判员："),
-    ("body", "北京市正义律师事务所接受原告张伟的委托，指派本律师担任其诉讼代理人。"
-             "结合庭审情况，发表如下代理意见："),
+    ("body", "审判长、审判员：北京市正义律师事务所接受原告张伟的委托，"
+             "指派王律师担任其诉讼代理人。结合庭审情况，发表如下代理意见："),
     ("body", "第一，本案房屋租赁合同合法有效，双方均应严格履行。"
              "被告承租房屋后长期拖欠租金，构成根本违约。"),
     ("body", "第二，合同约定的解除条件已经成就。"
              "被告逾期支付租金已远超三十日，原告依法享有合同解除权。"),
-    ("body", "第三，原告主张的租金及违约金计算方式清楚、依据充分，"
-             "应予全额支持。以上意见，请合议庭予以采纳。"),
+    ("body", "第三，原告主张的租金及违约金计算方式清楚、依据充分，应予全额支持。"
+             "以上意见，请合议庭予以采纳。"),
     ("spacer", "24"),
-    ("plain", "代理人：王律师"),
-    ("plain", "北京市正义律师事务所"),
-    ("plain", "2026年8月20日"),
+    ("plain", "代理人：王律师    北京市正义律师事务所    2026年8月20日"),
+]
+
+PANJUE = [
+    ("title", "北京市朝阳区人民法院民事判决书"),
+    ("plain", "(2026)京0105民初1234号"),
+    ("body", "原告张伟与被告李伟房屋租赁合同纠纷一案，本院于2026年7月15日立案后，"
+             "依法适用简易程序公开开庭进行了审理。原告委托诉讼代理人王律师，"
+             "被告李伟到庭参加诉讼。本案现已审理终结。"),
+    ("body", "经审理查明：2023年3月1日原、被告签订《房屋租赁合同》，"
+             "约定月租金贰万壹仟元，租期五年。被告自2025年10月起未付租金，"
+             "截至2026年6月30日累计拖欠六个月租金共计壹拾贰万陆仟元。"
+             "原告三次书面催告，被告均未履行。"),
+    ("body", "本院认为：涉案合同合法有效，被告逾期支付租金超过三十日，"
+             "合同约定的解除条件已成就。判决如下："),
+    ("body", "一、解除原告张伟与被告李伟签订的《房屋租赁合同》；"),
+    ("body", "二、被告李伟于本判决生效之日起十日内向原告张伟支付"
+             "拖欠租金壹拾贰万陆仟元；"),
+    ("body", "三、被告李伟向原告张伟支付违约金叁万柒仟捌佰元；"),
+    ("body", "案件受理费由被告李伟负担。如不服本判决，可在判决书送达之日起"
+             "十五日内上诉于北京市第三中级人民法院。"),
+    ("spacer", "24"),
+    ("plain", "审判员：刘某某        二〇二六年九月二日"),
 ]
 
 HETONG = [
@@ -122,14 +142,13 @@ HETONG = [
     ("h2", "第三条 付款方式"),
     ("body", "合同签订后三日内买受人支付预付款30%，即人民币伍拾伍万捌仟元；"
              "验收合格后三十日内支付剩余货款70%，即人民币壹佰叁拾万贰仟元。"),
-    ("h2", "第四条 质量保证"),
-    ("body", "出卖人保证货物符合国家标准及合同约定的技术参数，"
-             "质量保证期为验收合格之日起十二个月。质保期内出现质量问题的，"
-             "出卖人应在接到通知后四十八小时内到场维修或更换。"),
-    ("h2", "第五条 违约责任"),
-    ("body", "买受人逾期付款的，每逾期一日按应付未付金额的万分之五向出卖人支付违约金；"
-             "出卖人逾期交货的，按同等标准承担违约责任。"),
-    ("pagebreak", ""),
+    ("h2", "第四条 质量保证与第五条 违约责任"),
+    ("body", "质量保证期为验收合格之日起十二个月，质保期内出现质量问题的，"
+             "出卖人应在四十八小时内到场维修或更换。"
+             "买受人逾期付款的，每逾期一日按应付未付金额的万分之五支付违约金。"),
+]
+
+CUIKUAN = [
     ("title", "催款函"),
     ("plain", "致：恒远建设工程有限公司"),
     ("body", "贵我双方于2024年11月7日签订《工矿产品买卖合同》。"
@@ -142,10 +161,10 @@ HETONG = [
              "及相应违约金。逾期仍不支付的，我司将依法提起诉讼并申请财产保全，"
              "届时产生的诉讼费、保全费、律师费等均由贵司承担。"),
     ("spacer", "24"),
-    ("plain", "华信机械设备制造有限公司"),
-    ("plain", "2026年3月10日"),
+    ("plain", "华信机械设备制造有限公司        2026年3月10日"),
 ]
 
+# 案件 -> (基本信息, 额外自定义目录, [(文件名, 目录名, 内容块)])
 CASES = [
     {
         "case_no": "(2026)京0105民初1234号",
@@ -153,8 +172,14 @@ CASES = [
         "cause": "房屋租赁合同纠纷",
         "parties": "原告：张伟\n被告：李伟",
         "lawyer": "王律师",
-        "remark": "办公用房拖欠租金六个月，请求解除合同并支付违约金",
-        "docs": [("起诉状及证据材料.pdf", QISUZHUANG)],
+        "remark": "办公用房拖欠租金六个月，已判决解除合同",
+        "extra_folders": [],
+        "docs": [
+            ("民事起诉状.pdf", "诉讼文书", QISU),
+            ("代理词.pdf", "诉讼文书", DAILI),
+            ("证据目录.pdf", "证据材料", ZHENGJU),
+            ("民事判决书.pdf", "裁判文书", PANJUE),
+        ],
     },
     {
         "case_no": "(2026)京0112民初5678号",
@@ -163,7 +188,11 @@ CASES = [
         "parties": "原告：华信机械设备制造有限公司\n被告：恒远建设工程有限公司",
         "lawyer": "陈律师",
         "remark": "塔式起重机货款拖欠，已发催款函",
-        "docs": [("买卖合同及催款函.pdf", HETONG)],
+        "extra_folders": ["合同文件", "往来函件"],
+        "docs": [
+            ("工矿产品买卖合同.pdf", "合同文件", HETONG),
+            ("催款函.pdf", "往来函件", CUIKUAN),
+        ],
     },
 ]
 
@@ -174,7 +203,6 @@ def reset_and_seed() -> None:
     with pool.connection() as conn:
         conn.execute("TRUNCATE cases RESTART IDENTITY CASCADE")
         conn.commit()
-    # TRUNCATE 不经过应用层，手动清掉旧 PDF 文件
     for f in STORAGE_DIR.rglob("*.pdf"):
         f.unlink()
 
@@ -183,7 +211,7 @@ def reset_and_seed() -> None:
 
     for case in CASES:
         with pool.connection() as conn:
-            row = conn.execute(
+            crow = conn.execute(
                 """
                 INSERT INTO cases (case_no, title, cause, parties, lawyer, remark)
                 VALUES (%(case_no)s, %(title)s, %(cause)s, %(parties)s,
@@ -193,25 +221,41 @@ def reset_and_seed() -> None:
                 case,
             ).fetchone()
             conn.commit()
-            case_id = row[0]
+            case_id = crow[0]
 
-        for filename, blocks in case["docs"]:
+            # 默认目录 + 自定义目录
+            folder_names = DEFAULT_FOLDERS + case["extra_folders"]
+            for pos, name in enumerate(folder_names):
+                conn.execute(
+                    "INSERT INTO folders (case_id, name, position) VALUES (%s,%s,%s)",
+                    (case_id, name, pos),
+                )
+            name_to_id = {
+                r[0]: r[1]
+                for r in conn.execute(
+                    "SELECT name, id FROM folders WHERE case_id=%s", (case_id,)
+                ).fetchall()
+            }
+            conn.commit()
+
+        for filename, folder_name, blocks in case["docs"]:
             pdf = build_pdf(blocks)
             (out_dir / filename).write_bytes(pdf)
             with pool.connection() as conn:
                 drow = conn.execute(
                     """
-                    INSERT INTO documents (case_id, filename, stored_name,
+                    INSERT INTO documents (case_id, folder_id, filename, stored_name,
                                            size_bytes, status)
-                    VALUES (%s, %s, '', %s, 'processing')
+                    VALUES (%s, %s, %s, '', %s, 'processing')
                     RETURNING id
                     """,
-                    (case_id, filename, len(pdf)),
+                    (case_id, name_to_id[folder_name], filename, len(pdf)),
                 ).fetchone()
                 conn.commit()
                 doc_id = drow[0]
             save_pdf_then_index(doc_id, filename, pdf)
-            print(f"  案件#{case_id} 上传《{filename}》({len(pdf)//1024}KB)")
+            print(f"  案件#{case_id} [{folder_name}] 《{filename}》"
+                  f"({len(pdf)//1024}KB)")
 
     print("演示数据就绪。")
 

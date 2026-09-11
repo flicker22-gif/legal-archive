@@ -106,6 +106,11 @@ function SearchInner() {
                 {h.case_title}
               </Link>
               {h.case_no && <span className="tag">{h.case_no}</span>}
+              {h.folder_name ? (
+                <span className="tag cause">📁 {h.folder_name}</span>
+              ) : (
+                <span className="tag">未分类</span>
+              )}
               <span className="file">
                 {h.filename} · 第 {h.page_no} 页
               </span>

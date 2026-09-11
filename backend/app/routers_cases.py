@@ -2,8 +2,8 @@
 from fastapi import APIRouter, HTTPException, Query
 from psycopg.rows import dict_row, tuple_row
 
-from .db import pool
-from .models import CaseDetail, CaseIn, CaseOut, DocumentOut
+from .db import DEFAULT_FOLDERS, pool
+from .models import CaseDetail, CaseIn, CaseOut, DocumentOut, FolderOut
 from .storage import delete_case_files
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
@@ -26,6 +26,12 @@ def create_case(payload: CaseIn) -> CaseOut:
             """,
             payload.model_dump(),
         ).fetchone()
+        case_id = row["id"]
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO folders (case_id, name, position) VALUES (%s, %s, %s)",
+                [(case_id, name, pos) for pos, name in enumerate(DEFAULT_FOLDERS)],
+            )
         conn.commit()
     return _row_to_case(row)
 
@@ -72,14 +78,29 @@ def get_case(case_id: int) -> CaseDetail:
         case = conn.execute("SELECT * FROM cases WHERE id=%s", (case_id,)).fetchone()
         if not case:
             raise HTTPException(404, "案件不存在")
+        folders = conn.execute(
+            """
+            SELECT f.*, count(d.id) AS doc_count
+              FROM folders f
+              LEFT JOIN documents d ON d.folder_id = f.id
+             WHERE f.case_id=%s
+             GROUP BY f.id
+             ORDER BY f.position, f.id
+            """,
+            (case_id,),
+        ).fetchall()
         docs = conn.execute(
             """
-            SELECT * FROM documents WHERE case_id=%s
-            ORDER BY uploaded_at DESC, id DESC
+            SELECT d.*, f.name AS folder_name
+              FROM documents d
+              LEFT JOIN folders f ON f.id = d.folder_id
+             WHERE d.case_id=%s
+             ORDER BY d.uploaded_at DESC, d.id DESC
             """,
             (case_id,),
         ).fetchall()
     detail = CaseDetail.model_validate(case)
+    detail.folders = [FolderOut.model_validate(f) for f in folders]
     detail.documents = [DocumentOut.model_validate(d) for d in docs]
     return detail
 

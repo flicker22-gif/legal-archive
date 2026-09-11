@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import close_pool, init_pool, init_schema
 from .routers_cases import router as cases_router
 from .routers_documents import router as documents_router
+from .routers_folders import router as folders_router
 from .routers_search import router as search_router
 
 
@@ -34,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(cases_router)
+app.include_router(folders_router)
 app.include_router(documents_router)
 app.include_router(search_router)
 
