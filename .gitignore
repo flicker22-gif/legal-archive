@@ -1,0 +1,20 @@
+# 依赖与构建产物
+node_modules/
+.next/
+backend/.venv/
+backend/storage/
+__pycache__/
+*.pyc
+
+# 便携 PostgreSQL：解包产物体积过大（pgroot 约 63MB），按 README 从 tools/dl 的 deb 解包重建
+tools/pgdata/
+tools/pgrun/
+tools/pgroot/
+tools/test.bin
+
+# 日志
+run/
+*.log
+
+# 系统
+.DS_Store
