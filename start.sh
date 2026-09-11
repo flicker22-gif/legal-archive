@@ -16,7 +16,11 @@ fi
 
 echo "▶ 启动 Next.js 前端 (端口 4730)…"
 if ! curl -sf http://127.0.0.1:4730 >/dev/null 2>&1; then
-  (cd "$ROOT/frontend" && setsid nohup npm run dev \
+  # 优先用生产模式（启动快）；没有构建产物时先 build
+  if [ ! -d "$ROOT/frontend/.next" ]; then
+    (cd "$ROOT/frontend" && npm run build)
+  fi
+  (cd "$ROOT/frontend" && setsid nohup npm run start \
       > "$ROOT/run/frontend.log" 2>&1 < /dev/null &)
 fi
 

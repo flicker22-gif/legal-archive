@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type CaseItem } from "@/lib/api";
+import SecurityBadge from "@/components/SecurityBadge";
+import { canManage, getRole, type Role } from "@/lib/rbac";
 
 function CaseListInner() {
   const router = useRouter();
@@ -12,8 +14,10 @@ function CaseListInner() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [role, setRole] = useState<Role>("secretary");
 
   useEffect(() => {
+    setRole(getRole());
     const t = setTimeout(() => {
       setLoading(true);
       api
@@ -37,7 +41,7 @@ function CaseListInner() {
   return (
     <>
       <h1 className="page-title">案件归档</h1>
-      <p className="page-sub">按案件登记当事人、案由、承办律师，并上传卷宗 PDF。</p>
+      <p className="page-sub">按案件登记当事人、案由、承办律师，并按目录上传卷宗 PDF。</p>
 
       {err && <div className="error-banner">{err}</div>}
 
@@ -49,9 +53,11 @@ function CaseListInner() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
-          <Link href="/cases/new" className="btn">
-            ＋ 录入案件
-          </Link>
+          {canManage(role) && (
+            <Link href="/cases/new" className="btn">
+              ＋ 录入案件
+            </Link>
+          )}
         </form>
       </div>
 
@@ -65,16 +71,21 @@ function CaseListInner() {
       {loading ? (
         <div className="empty">加载中…</div>
       ) : items.length === 0 ? (
-        <div className="empty">没有符合条件的案件，点击右上角「录入案件」新建。</div>
+        <div className="empty">
+          {canManage(role)
+            ? "没有符合条件的案件，点击右上角「录入案件」新建。"
+            : "没有可查看的案件。"}
+        </div>
       ) : (
         items.map((c) => (
           <Link key={c.id} href={`/cases/${c.id}`} className="case-item">
-            <div className="t">{c.title}</div>
+            <div className="row" style={{ gap: 10 }}>
+              <div className="t" style={{ flex: 1 }}>{c.title}</div>
+              <SecurityBadge level={c.security_level} />
+            </div>
             <div className="meta">
               {c.case_no && <span>案号：{c.case_no}</span>}
-              {c.cause && (
-                <span className="tag cause">{c.cause}</span>
-              )}
+              {c.cause && <span className="tag cause">{c.cause}</span>}
               <span>当事人：{c.parties.replace(/\n/g, "、")}</span>
               <span className="tag lawyer">承办：{c.lawyer}</span>
             </div>

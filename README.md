@@ -14,6 +14,7 @@
 | 数据库 | PostgreSQL 15（`tsvector` + GIN 索引全文检索） |
 | PDF 解析 | PyMuPDF（逐页抽取文本） |
 | 中文检索 | 字级二元组（bigram）+ PostgreSQL `tsvector`/GIN/短语查询 |
+| 权限 | 保密级别（普通/秘密/机密）× 角色（秘书/律师/合伙人）RBAC |
 
 ## 目录结构
 
@@ -77,6 +78,27 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cd ../frontend && npm install && npm run dev
 ```
 
+## 角色与保密级别
+
+每个案件有保密级别 **普通 normal / 秘密 secret / 机密 confidential**（仅合伙人可调整）；
+系统有三种角色，顶栏「身份」可切换（演示用 `X-User-Role` 请求头模拟登录，
+PDF 链接因浏览器直接加载用 `?role=` 兜底）：
+
+| 能力 | 行政秘书 secretary | 承办律师 lawyer | 合伙人 partner |
+|---|---|---|---|
+| 案件列表 | 全部（需管理） | 普通+秘密（机密不可见） | 全部 |
+| 普通件 查看正文/检索 | ✅ | ✅ | ✅ |
+| 普通件 下载 | ✅ | ✅ | ✅ |
+| 秘密件 查看正文/检索 | ❌ | ✅ | ✅ |
+| 秘密件 下载 | ❌ | ❌ | ✅ |
+| 机密件 任何内容 | ❌ | ❌（详情 403、检索过滤） | ✅ |
+| 录入案件/上传/目录整理/移动 | ✅ | ❌ | ✅ |
+| 修改保密级别 / 删除整案 | ❌ | ❌ | ✅ |
+
+秘书/律师仍能看到秘密/机密案件的**登记信息和卷宗清单**（便于归档管理），
+但无权查看 PDF 正文、下载原件或得到检索命中；越权请求后端返回 403，
+前端对应按钮隐藏并显示「内容受限」。
+
 ## 使用流程
 
 1. **录入案件**：首页「＋ 录入案件」填写案件名称、案号、案由、当事人（可多行）、
@@ -100,8 +122,9 @@ cd ../frontend && npm install && npm run dev
 | POST | `/api/cases` | 录入案件（同时建默认目录） |
 | GET | `/api/cases?q=&page=` | 案件列表（按案号/名称/当事人/律师/案由筛选） |
 | GET | `/api/cases/{id}` | 案件详情（含 folders 及卷宗的目录归属） |
-| PUT/DELETE | `/api/cases/{id}` | 修改 / 删除（连带目录、卷宗、索引与文件） |
-| POST | `/api/cases/{id}/folders` | 新建目录 |
+| PUT/DELETE | `/api/cases/{id}` | 修改 / 删除（连带目录、卷宗、索引与文件；删除仅合伙人） |
+| PATCH | `/api/cases/{id}/security-level` | 合伙人调整保密级别 |
+| POST | `/api/cases/{id}/folders` | 新建目录（秘书/合伙人） |
 | PUT/DELETE | `/api/cases/{id}/folders/{fid}` | 改名 / 删除（卷宗回未分类） |
 | POST | `/api/cases/{id}/folders/reorder` | 按传入 id 顺序重排目录 |
 | POST | `/api/cases/{id}/documents` | 上传 PDF（multipart 字段 file + 可选 folder_id，≤50MB） |
@@ -110,7 +133,10 @@ cd ../frontend && npm install && npm run dev
 | GET | `/api/cases/{id}/documents/{doc}/preview` | 内联 PDF（支持 `#page=N`） |
 | GET | `/api/cases/{id}/documents/{doc}/download` | 下载 PDF |
 | DELETE | `/api/cases/{id}/documents/{doc}` | 删除卷宗 |
-| GET | `/api/search?q=&case_id=&folder_id=&page=` | 全文检索（folder_id=0 表示未分类） |
+| GET | `/api/search?q=&case_id=&folder_id=&page=` | 全文检索（folder_id=0 表示未分类；按角色过滤保密级别） |
+
+所有接口读取请求头 `X-User-Role: secretary|lawyer|partner`（缺省秘书）；
+PDF 预览/下载是浏览器直接打开的链接，支持 `?role=` 携带身份。
 
 自测：`cd backend && .venv/bin/python smoke_test.py`
 
@@ -134,7 +160,8 @@ PostgreSQL 自带分词器不能切分中文；纯 jieba 词典分词对「塔�
 ## 数据模型
 
 ```text
-cases(id, case_no, title, cause, parties, lawyer, remark, created_at)
+cases(id, case_no, title, cause, parties, lawyer, remark,
+      security_level[normal|secret|confidential], created_at)
 folders(id, case_id→cases, name, position, created_at)  UNIQUE(case_id,name)
 documents(id, case_id→cases, folder_id→folders[ON DELETE SET NULL],
           filename, stored_name, page_count, size_bytes,
@@ -150,6 +177,8 @@ PDF 实体文件保存在 `backend/storage/<每千个文档分桶>/<uuid>_<原�
 
 ## 已知边界（演示版）
 
-- 无登录鉴权与多租户权限控制（律所内部系统，生产环境需补充）。
+- 鉴权为**演示态**：用 `X-User-Role` 头（顶栏切换写入 localStorage）模拟登录，
+  没有真实账号、会话与密码；生产环境应接 SSO/JWT，并在律师与具体案件间建立
+  承办关联（目前律师是全局角色，非"本案承办律师"粒度）。
 - 仅处理带文本层的 PDF；扫描件需先 OCR（可在 `pdf_service` 中接 tesseract）。
 - 文件存本地磁盘；多实例部署建议换 S3/MinIO。

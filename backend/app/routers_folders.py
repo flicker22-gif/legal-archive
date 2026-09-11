@@ -1,10 +1,11 @@
 """卷宗目录（文件夹）接口：案件内自定义目录的增删改与排序。"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from psycopg.rows import dict_row
 from psycopg.errors import UniqueViolation
 
 from .db import pool
 from .models import FolderIn, FolderOut
+from .permissions import current_role, require_manage
 
 router = APIRouter(prefix="/api/cases/{case_id}/folders", tags=["folders"])
 
@@ -29,7 +30,10 @@ def _get_folder(conn, case_id: int, folder_id: int) -> dict | None:
 
 
 @router.post("", response_model=FolderOut, status_code=201)
-def create_folder(case_id: int, payload: FolderIn) -> FolderOut:
+def create_folder(
+    case_id: int, payload: FolderIn, role: str = Depends(current_role)
+) -> FolderOut:
+    require_manage(role)
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "目录名称不能为空")
@@ -62,8 +66,10 @@ def create_folder(case_id: int, payload: FolderIn) -> FolderOut:
 
 @router.put("/{folder_id}", response_model=FolderOut)
 def rename_folder(
-    case_id: int, folder_id: int, payload: FolderIn
+    case_id: int, folder_id: int, payload: FolderIn,
+    role: str = Depends(current_role),
 ) -> FolderOut:
+    require_manage(role)
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "目录名称不能为空")
@@ -87,8 +93,12 @@ def rename_folder(
 
 
 @router.post("/reorder", response_model=list[FolderOut])
-def reorder_folders(case_id: int, folder_ids: list[int]) -> list[FolderOut]:
+def reorder_folders(
+    case_id: int, folder_ids: list[int],
+    role: str = Depends(current_role),
+) -> list[FolderOut]:
     """按传入的 id 顺序重写 position。"""
+    require_manage(role)
     with pool.connection() as conn:
         conn.row_factory = dict_row
         if not _case_exists(conn, case_id):
@@ -122,8 +132,11 @@ def reorder_folders(case_id: int, folder_ids: list[int]) -> list[FolderOut]:
 
 
 @router.delete("/{folder_id}", status_code=204)
-def remove_folder(case_id: int, folder_id: int) -> None:
+def remove_folder(
+    case_id: int, folder_id: int, role: str = Depends(current_role)
+) -> None:
     """删除目录；其内卷宗自动回到「未分类」（外键 ON DELETE SET NULL）。"""
+    require_manage(role)
     with pool.connection() as conn:
         if not _case_exists(conn, case_id):
             raise HTTPException(404, "案件不存在")

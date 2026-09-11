@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import RoleSwitcher from "./RoleSwitcher";
 
 const LINKS = [
   { href: "/", label: "案件归档", match: (p: string) => p === "/" || p.startsWith("/cases") },
@@ -28,6 +29,7 @@ export default function SiteHeader() {
             </Link>
           ))}
         </nav>
+        <RoleSwitcher />
       </div>
     </header>
   );

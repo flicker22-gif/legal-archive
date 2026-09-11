@@ -1,4 +1,8 @@
 // 后端 API 类型与请求封装
+import { getRole, type Role, type SecurityLevel } from "./rbac";
+
+export type { Role, SecurityLevel };
+
 export interface FolderItem {
   id: number;
   case_id: number;
@@ -15,6 +19,7 @@ export interface CaseItem {
   parties: string;
   lawyer: string;
   remark: string | null;
+  security_level: SecurityLevel;
   created_at: string;
 }
 
@@ -49,6 +54,7 @@ export interface SearchHit {
   case_id: number;
   case_no: string | null;
   case_title: string;
+  security_level: SecurityLevel;
   folder_id: number | null;
   folder_name: string | null;
   filename: string;
@@ -72,13 +78,17 @@ export interface CaseInput {
   parties: string;
   lawyer: string;
   remark?: string | null;
+  security_level?: SecurityLevel;
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  return { "X-User-Role": getRole(), ...extra };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+  const headers = authHeaders();
+  if (init?.body) headers["Content-Type"] = "application/json";
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
     try {
@@ -87,7 +97,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(detail);
+    const err = new Error(detail);
+    (err as Error & { status?: number }).status = res.status;
+    throw err;
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -103,6 +115,13 @@ export const api = {
     request<CaseItem>(`/api/cases`, {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+  deleteCase: (id: number) =>
+    request<void>(`/api/cases/${id}`, { method: "DELETE" }),
+  setSecurityLevel: (caseId: number, level: SecurityLevel) =>
+    request<CaseItem>(`/api/cases/${caseId}/security-level`, {
+      method: "PATCH",
+      body: JSON.stringify({ security_level: level }),
     }),
 
   // ---- 目录 ----
@@ -150,6 +169,7 @@ export const api = {
     return fetch(`/api/cases/${caseId}/documents`, {
       method: "POST",
       body: fd,
+      headers: authHeaders(),
     }).then(async (r) => {
       if (!r.ok) {
         const b = await r.json().catch(() => ({}));
@@ -180,13 +200,20 @@ export const api = {
     ),
 };
 
+// PDF 由浏览器 iframe / 新标签直接加载，无法带自定义头，用 ?role= 兜底
 export function previewUrl(
   caseId: number,
   docId: number,
   page?: number
 ) {
+  const role = typeof window !== "undefined" ? getRole() : "secretary";
   const hash = page ? `#page=${page}` : "";
-  return `/api/cases/${caseId}/documents/${docId}/preview${hash}`;
+  return `/api/cases/${caseId}/documents/${docId}/preview?role=${role}${hash}`;
+}
+
+export function downloadUrl(caseId: number, docId: number) {
+  const role = typeof window !== "undefined" ? getRole() : "secretary";
+  return `/api/cases/${caseId}/documents/${docId}/download?role=${role}`;
 }
 
 export function formatSize(bytes: number): string {

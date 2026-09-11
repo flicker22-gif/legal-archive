@@ -1,8 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import {
+  canManage,
+  canSetSecurity,
+  getRole,
+  LEVEL_LABELS,
+  type Role,
+  type SecurityLevel,
+} from "@/lib/rbac";
 
 const EMPTY = {
   case_no: "",
@@ -16,8 +24,18 @@ const EMPTY = {
 export default function NewCasePage() {
   const router = useRouter();
   const [form, setForm] = useState(EMPTY);
+  const [level, setLevel] = useState<SecurityLevel>("normal");
+  const [role, setRole] = useState<Role>("secretary");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    const r = getRole();
+    setRole(r);
+    if (!canManage(r)) {
+      setErr("当前角色（承办律师）无权录入案件，请切换为行政秘书或合伙人。");
+    }
+  }, []);
 
   const set = (k: keyof typeof EMPTY) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -39,6 +57,7 @@ export default function NewCasePage() {
         parties: form.parties.trim(),
         lawyer: form.lawyer.trim(),
         remark: form.remark || null,
+        security_level: level,
       });
       router.push(`/cases/${c.id}`);
     } catch (e) {
@@ -67,11 +86,28 @@ export default function NewCasePage() {
             placeholder="例：(2026)京0105民初1234号" />
         </label>
 
-        <label className="field">
-          <span className="lbl">案由</span>
-          <input type="text" value={form.cause} onChange={set("cause")}
-            placeholder="例：房屋租赁合同纠纷" />
-        </label>
+        <div className="row" style={{ gap: 16 }}>
+          <label className="field" style={{ flex: 1 }}>
+            <span className="lbl">案由</span>
+            <input type="text" value={form.cause} onChange={set("cause")}
+              placeholder="例：房屋租赁合同纠纷" />
+          </label>
+          {canSetSecurity(role) && (
+            <label className="field" style={{ flex: "0 0 180px" }}>
+              <span className="lbl">保密级别</span>
+              <select
+                value={level}
+                onChange={(e) => setLevel(e.target.value as SecurityLevel)}
+              >
+                <option value="normal">{LEVEL_LABELS.normal}</option>
+                <option value="secret">{LEVEL_LABELS.secret}（律师不可下载）</option>
+                <option value="confidential">
+                  {LEVEL_LABELS.confidential}（仅合伙人可看）
+                </option>
+              </select>
+            </label>
+          )}
+        </div>
 
         <label className="field">
           <span className="lbl">当事人<span className="req">*</span></span>
@@ -93,7 +129,8 @@ export default function NewCasePage() {
         </label>
 
         <div className="row">
-          <button className="btn" type="submit" disabled={saving}>
+          <button className="btn" type="submit"
+            disabled={saving || !canManage(role)}>
             {saving ? "保存中…" : "保存案件"}
           </button>
           <button type="button" className="btn ghost"
@@ -105,3 +142,4 @@ export default function NewCasePage() {
     </>
   );
 }
+

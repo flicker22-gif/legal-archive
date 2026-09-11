@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, previewUrl, type SearchHit } from "@/lib/api";
+import SecurityBadge from "@/components/SecurityBadge";
 
 const PAGE_SIZE = 10;
 
@@ -105,6 +106,7 @@ function SearchInner() {
               <Link href={`/cases/${h.case_id}`} className="case-t">
                 {h.case_title}
               </Link>
+              <SecurityBadge level={h.security_level} />
               {h.case_no && <span className="tag">{h.case_no}</span>}
               {h.folder_name ? (
                 <span className="tag cause">📁 {h.folder_name}</span>

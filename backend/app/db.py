@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS cases (
     parties     TEXT NOT NULL,                     -- 当事人（可多个）
     lawyer      VARCHAR(100) NOT NULL,             -- 承办律师
     remark      TEXT,                              -- 备注
+    security_level VARCHAR(20) NOT NULL DEFAULT 'normal',
+                                           -- normal 普通 / secret 秘密 / confidential 机密
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -75,6 +77,15 @@ CREATE INDEX IF NOT EXISTS idx_pages_tsv ON document_pages USING GIN (tsv);
 
 -- 旧库幂等迁移
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder_id BIGINT;
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS security_level
+    VARCHAR(20) NOT NULL DEFAULT 'normal';
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'cases_security_level_chk') THEN
+        ALTER TABLE cases ADD CONSTRAINT cases_security_level_chk
+            CHECK (security_level IN ('normal','secret','confidential'));
+    END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id);
 DO $$
 BEGIN

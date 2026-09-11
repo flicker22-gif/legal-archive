@@ -431,3 +431,51 @@ mark {
   .folder-layout { grid-template-columns: 1fr; }
   .folder-sidebar { position: static; }
 }
+
+/* ---------- 角色与保密级别 ---------- */
+.role-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 14px;
+  padding-left: 14px;
+  border-left: 1px solid rgba(255,255,255,0.25);
+}
+.role-switcher .role-label {
+  color: rgba(255,255,255,0.65);
+  font-size: 13px;
+}
+.role-switcher select {
+  width: auto;
+  padding: 5px 10px;
+  font-size: 13.5px;
+  border-radius: 6px;
+  background: #fff;
+  border: none;
+}
+
+.sec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  padding: 1px 10px;
+  border-radius: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sec-badge.sm { font-size: 11.5px; padding: 0 8px; }
+.sec-normal { background: #e8f4ec; color: #2f7d4f; border: 1px solid #cfe6d7; }
+.sec-secret { background: #fdf3e0; color: #9a6212; border: 1px solid #ecd9ad; }
+.sec-confidential { background: #f6e3e1; color: #a0332a; border: 1px solid #e6c3bf; }
+
+.forbidden-panel {
+  background: #fff;
+  border: 1px solid #e6c3bf;
+  border-left: 4px solid var(--seal);
+  border-radius: var(--radius);
+  padding: 38px 28px;
+  text-align: center;
+  color: var(--ink-soft);
+}
+.forbidden-panel .big { font-size: 22px; margin-bottom: 8px; }

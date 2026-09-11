@@ -2,6 +2,8 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
+SECURITY_LEVELS = ("normal", "secret", "confidential")
+
 
 class CaseIn(BaseModel):
     case_no: str | None = Field(None, max_length=100, description="案号")
@@ -10,6 +12,13 @@ class CaseIn(BaseModel):
     parties: str = Field(..., min_length=1, description="当事人，多个用换行或逗号分隔")
     lawyer: str = Field(..., min_length=1, max_length=100, description="承办律师")
     remark: str | None = None
+    security_level: str = Field("normal", description="保密级别 normal/secret/confidential")
+
+    def normalized_level(self) -> str:
+        level = (self.security_level or "normal").strip().lower()
+        if level not in SECURITY_LEVELS:
+            raise ValueError("保密级别必须是 normal / secret / confidential")
+        return level
 
 
 class CaseOut(BaseModel):
@@ -21,7 +30,12 @@ class CaseOut(BaseModel):
     parties: str
     lawyer: str
     remark: str | None
+    security_level: str
     created_at: datetime
+
+
+class SecurityLevelIn(BaseModel):
+    security_level: str = Field(..., description="normal/secret/confidential")
 
 
 class FolderIn(BaseModel):
@@ -66,6 +80,7 @@ class PageHit(BaseModel):
     case_id: int
     case_no: str | None
     case_title: str
+    security_level: str
     folder_id: int | None = None
     folder_name: str | None = None
     filename: str
