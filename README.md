@@ -26,14 +26,16 @@
 │   │   ├── db.py               连接池、表结构（cases/documents/document_pages）
 │   │   ├── models.py             Pydantic 模型
 │   │   ├── search.py           bigram 索引/查询构造、高亮摘要
-│   │   ├── pdf_service.py      PDF 落盘、逐页抽取、写 tsvector
+│   │   ├── pdf_service.py      PDF 落盘、逐页抽取、写 tsvector（认领式索引任务）
+│   │   ├── indexer.py          索引任务队列：后台线程池、启动恢复、僵死任务巡检
 │   │   ├── storage.py          磁盘文件清理
 │   │   ├── routers_cases.py    案件录入/列表/详情/删除
 │   │   ├── routers_folders.py  卷宗目录增删改/排序
-│   │   ├── routers_documents.py 卷宗上传/移动/状态/预览/下载/删除
+│   │   ├── routers_documents.py 卷宗上传(去重)/重试/移动/状态/预览/下载/删除
 │   │   └── routers_search.py   全文检索（分页、按案件/目录过滤、相关度排序）
 │   ├── seed_demo.py        演示案件 + 中文 PDF 生成/入库
-│   └── smoke_test.py       端到端接口自测
+│   ├── smoke_test.py       端到端接口自测
+│   └── test_index_tasks.py 索引任务链路测试（pytest，独立测试库）
 ├── frontend/               Next.js 前端
 │   └── app/
 │       ├── page.tsx            案件列表与筛选（首页）
@@ -106,8 +108,12 @@ PDF 链接因浏览器直接加载用 `?role=` 兜底）：
 2. **整理卷宗目录**：案件详情左侧目录栏可新建自定义目录（如「庭审笔录」「往来函件」）、
    改名、↑↓ 调整顺序、删除（删除目录不会删除卷宗，其内卷宗自动回到「未分类」）。
 3. **上传卷宗**：先在目录栏选中目标目录，再将 PDF 拖入上传区（可多份），文件即归入该目录；
-   也可在每份卷宗右侧的下拉框中随时移动目录。后端异步逐页抽取文本、构造 bigram 索引，
-   页面自动轮询 `处理中 → 可检索`；扫描件等无文本层 PDF 会标记「索引失败」。
+   也可在每份卷宗右侧的下拉框中随时移动目录。上传按**内容指纹（sha256）去重**：同一案件下
+   重复上传同一内容不会重复落盘，直接返回已有卷宗并提示。后端异步逐页抽取文本、构造
+   bigram 索引，页面自动轮询 `排队中 → 处理中 → 可检索`；扫描件等无文本层 PDF 会标记
+   「索引失败」并给出可读原因，秘书/合伙人可点「重试」重建索引（重试前自动清理旧页索引，
+   成功后只保留一套页数据）。索引任务是**可恢复**的：服务重启后未完成任务自动重新排队执行，
+   处理中超时的任务会被巡检重排，多次中断仍失败的任务明确标记失败而不会停在「处理中」。
 4. **全文检索**：
    - 顶部「全文检索」跨所有案件检索，结果带目录标签；案件详情页可只在本案、
      甚至当前选中目录内检索。
@@ -127,7 +133,8 @@ PDF 链接因浏览器直接加载用 `?role=` 兜底）：
 | POST | `/api/cases/{id}/folders` | 新建目录（秘书/合伙人） |
 | PUT/DELETE | `/api/cases/{id}/folders/{fid}` | 改名 / 删除（卷宗回未分类） |
 | POST | `/api/cases/{id}/folders/reorder` | 按传入 id 顺序重排目录 |
-| POST | `/api/cases/{id}/documents` | 上传 PDF（multipart 字段 file + 可选 folder_id，≤50MB） |
+| POST | `/api/cases/{id}/documents` | 上传 PDF（multipart 字段 file + 可选 folder_id，≤50MB；同案件同内容去重返回已有卷宗） |
+| POST | `/api/cases/{id}/documents/{doc}/retry` | 索引失败的手动重试（秘书/合伙人；仅 failed 状态，并发安全） |
 | PATCH | `/api/cases/{id}/documents/{doc}/move` | 移动卷宗到目录（folder_id=null=未分类） |
 | GET | `/api/cases/{id}/documents/{doc}/status` | 索引状态轮询 |
 | GET | `/api/cases/{id}/documents/{doc}/preview` | 内联 PDF（支持 `#page=N`） |
@@ -139,6 +146,8 @@ PDF 链接因浏览器直接加载用 `?role=` 兜底）：
 PDF 预览/下载是浏览器直接打开的链接，支持 `?role=` 携带身份。
 
 自测：`cd backend && .venv/bin/python smoke_test.py`
+索引任务链路测试（重复上传/崩溃恢复/失败重试/并发/权限/旧库迁移，独立测试库）：
+`cd backend && .venv/bin/python -m pytest test_index_tasks.py -v`
 
 ## 中文检索的实现要点
 
@@ -165,7 +174,9 @@ cases(id, case_no, title, cause, parties, lawyer, remark,
 folders(id, case_id→cases, name, position, created_at)  UNIQUE(case_id,name)
 documents(id, case_id→cases, folder_id→folders[ON DELETE SET NULL],
           filename, stored_name, page_count, size_bytes,
-          status[processing|indexed|failed], error, uploaded_at, indexed_at)
+          status[queued|processing|indexed|failed], error,
+          content_hash, retry_count, task_started_at, uploaded_at, indexed_at)
+          UNIQUE(case_id, content_hash)  -- 同案件内容指纹去重
 document_pages(id, document_id→documents, page_no, raw_text, tsv TSVECTOR)
               UNIQUE(document_id,page_no);  GIN(tsv)
 ```

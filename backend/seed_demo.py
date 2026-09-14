@@ -3,6 +3,7 @@
 用法: backend/.venv/bin/python seed_demo.py
 依赖: reportlab（使用内置 CID 字体 STSong-Light，无需外部中文字体文件）
 """
+import hashlib
 from io import BytesIO
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from app.config import STORAGE_DIR
 from app.db import DEFAULT_FOLDERS, init_pool, init_schema, pool
-from app.pdf_service import save_pdf_then_index
+from app.pdf_service import index_document, save_uploaded_file
 
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
@@ -300,15 +301,21 @@ def reset_and_seed() -> None:
                 drow = conn.execute(
                     """
                     INSERT INTO documents (case_id, folder_id, filename, stored_name,
-                                           size_bytes, status)
-                    VALUES (%s, %s, %s, '', %s, 'processing')
+                                           size_bytes, status, content_hash)
+                    VALUES (%s, %s, %s, '', %s, 'queued', %s)
                     RETURNING id
                     """,
-                    (case_id, name_to_id[folder_name], filename, len(pdf)),
+                    (case_id, name_to_id[folder_name], filename, len(pdf),
+                     hashlib.sha256(pdf).hexdigest()),
                 ).fetchone()
-                conn.commit()
                 doc_id = drow[0]
-            save_pdf_then_index(doc_id, filename, pdf)
+                stored_name = save_uploaded_file(doc_id, filename, pdf)
+                conn.execute(
+                    "UPDATE documents SET stored_name=%s WHERE id=%s",
+                    (stored_name, doc_id),
+                )
+                conn.commit()
+            index_document(doc_id)
             print(f"  案件#{case_id} [{folder_name}] 《{filename}》"
                   f"({len(pdf)//1024}KB)")
 

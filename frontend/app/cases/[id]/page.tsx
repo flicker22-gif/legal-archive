@@ -83,7 +83,9 @@ export default function CaseDetailPage({
   }, [load]);
 
   const processing =
-    detail?.documents.some((d) => d.status === "processing") ?? false;
+    detail?.documents.some(
+      (d) => d.status === "processing" || d.status === "queued"
+    ) ?? false;
   useEffect(() => {
     if (!processing) return;
     const t = setInterval(load, 1500);
@@ -131,14 +133,28 @@ export default function CaseDetailPage({
       if (!file.name.toLowerCase().endsWith(".pdf")) continue;
       setUploading(true);
       try {
-        await api.uploadPdf(caseId, file, uploadTargetId);
+        const res = await api.uploadPdf(caseId, file, uploadTargetId);
         load();
-        flash(`已上传到「${uploadTargetName}」，正在建立索引…`);
+        flash(
+          res.deduplicated
+            ? `《${file.name}》与已上传的《${res.filename}》内容完全相同（指纹一致），未重复落盘`
+            : `已上传到「${uploadTargetName}」，正在建立索引…`
+        );
       } catch (e) {
         flash((e as Error).message, "err");
       } finally {
         setUploading(false);
       }
+    }
+  }
+
+  async function retryDoc(doc: DocumentItem) {
+    try {
+      await api.retryDocument(caseId, doc.id);
+      load();
+      flash(`《${doc.filename}》已重新排队，正在重建索引…`);
+    } catch (e) {
+      flash((e as Error).message, "err");
     }
   }
 
@@ -463,13 +479,29 @@ export default function CaseDetailPage({
                       {d.status === "indexed"
                         ? `已索引 ${d.page_count} 页 · ${formatDate(d.uploaded_at)}`
                         : d.status === "failed"
-                        ? `索引失败：${d.error}`
+                        ? `索引失败：${d.error ?? "未知原因"}${
+                            d.retry_count > 0 ? `（已重试 ${d.retry_count} 次）` : ""
+                          }`
+                        : d.status === "queued"
+                        ? `排队等待索引…${
+                            d.retry_count > 0 ? `（第 ${d.retry_count} 次重试）` : ""
+                          }`
                         : "正在抽取文本、建立索引…"}
                     </div>
                   </div>
 
+                  {d.status === "queued" && <span className="tag">排队中</span>}
                   {d.status === "processing" && <span className="tag warn">处理中</span>}
                   {d.status === "failed" && <span className="tag err">失败</span>}
+                  {d.status === "failed" && mayManage && (
+                    <button
+                      className="btn sm"
+                      title="重新解析并重建索引"
+                      onClick={() => retryDoc(d)}
+                    >
+                      重试
+                    </button>
+                  )}
 
                   {d.status === "indexed" && (
                     <>

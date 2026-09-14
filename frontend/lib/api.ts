@@ -31,10 +31,16 @@ export interface DocumentItem {
   filename: string;
   page_count: number;
   size_bytes: number;
-  status: "processing" | "indexed" | "failed";
+  status: "queued" | "processing" | "indexed" | "failed";
   error: string | null;
+  retry_count: number;
   uploaded_at: string;
   indexed_at: string | null;
+}
+
+// 上传响应：deduplicated=true 表示同案件下已存在相同内容的卷宗，未重复落盘
+export interface UploadResult extends DocumentItem {
+  deduplicated: boolean;
 }
 
 export interface CaseDetail extends CaseItem {
@@ -175,9 +181,13 @@ export const api = {
         const b = await r.json().catch(() => ({}));
         throw new Error(b.detail || "上传失败");
       }
-      return r.json() as Promise<DocumentItem>;
+      return r.json() as Promise<UploadResult>;
     });
   },
+  retryDocument: (caseId: number, docId: number) =>
+    request<DocumentItem>(`/api/cases/${caseId}/documents/${docId}/retry`, {
+      method: "POST",
+    }),
   moveDocument: (
     caseId: number,
     docId: number,

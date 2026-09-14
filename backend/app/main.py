@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import indexer
 from .db import close_pool, init_pool, init_schema
 from .routers_cases import router as cases_router
 from .routers_documents import router as documents_router
@@ -15,7 +16,12 @@ from .routers_search import router as search_router
 async def lifespan(app: FastAPI):
     init_pool()
     init_schema()
+    # 进程重启后重新发现未完成的索引任务（崩溃中断的 processing 重排、
+    # 未开始的 queued 重新投入），并启动僵死任务巡检
+    indexer.recover_interrupted_tasks()
+    indexer.start_sweeper()
     yield
+    indexer.shutdown()
     close_pool()
 
 

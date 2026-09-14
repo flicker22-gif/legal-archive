@@ -1,15 +1,17 @@
 """卷宗上传、移动、列表、PDF 预览/下载接口（含权限控制）。"""
-import asyncio
+import hashlib
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
+from psycopg.errors import UniqueViolation
 from psycopg.rows import dict_row, tuple_row
 
+from . import indexer
 from .config import MAX_UPLOAD_MB
 from .db import pool
-from .models import DocumentOut, MoveDocumentIn
-from .pdf_service import save_pdf_then_index, stored_path
+from .models import DocumentOut, MoveDocumentIn, UploadResult
+from .pdf_service import save_uploaded_file, stored_path
 from .permissions import (
     can_view,
     current_role,
@@ -27,12 +29,21 @@ _DOC_SELECT = """
       LEFT JOIN folders f ON f.id = d.folder_id
 """
 
+# 状态中文名（用于冲突提示）
+_STATUS_LABELS = {
+    "queued": "排队中",
+    "processing": "处理中",
+    "indexed": "可检索",
+    "failed": "失败",
+}
+
 
 def _case_level(conn, case_id: int) -> str | None:
+    """案件保密级别；调用方连接须为 dict_row（本模块统一）。"""
     row = conn.execute(
         "SELECT security_level FROM cases WHERE id=%s", (case_id,)
     ).fetchone()
-    return row[0] if row else None
+    return row["security_level"] if row else None
 
 
 def _resolve_folder(conn, case_id: int, folder_id: int | None) -> bool:
@@ -46,13 +57,14 @@ def _resolve_folder(conn, case_id: int, folder_id: int | None) -> bool:
     )
 
 
-@router.post("", response_model=DocumentOut, status_code=201)
+@router.post("", response_model=UploadResult, status_code=201)
 async def upload_document(
     case_id: int,
+    response: Response,
     role: str = Depends(current_role),
     file: UploadFile = File(...),
     folder_id: int | None = Form(None, description="归入的目录 id，空=未分类"),
-) -> DocumentOut:
+) -> UploadResult:
     require_manage(role)
     if (file.content_type or "") not in ("application/pdf", "application/octet-stream") \
             and not file.filename.lower().endswith(".pdf"):
@@ -66,6 +78,10 @@ async def upload_document(
     if not content.startswith(b"%PDF"):
         raise HTTPException(400, "文件不是有效的 PDF（缺少 %PDF 文件头）")
 
+    filename = Path(file.filename).name
+    # 内容指纹：同一案件下重复上传同一内容时返回已有卷宗，不重复落盘
+    content_hash = hashlib.sha256(content).hexdigest()
+
     with pool.connection() as conn:
         conn.row_factory = dict_row
         level = _case_level(conn, case_id)
@@ -73,24 +89,45 @@ async def upload_document(
             raise HTTPException(404, "案件不存在")
         if not _resolve_folder(conn, case_id, folder_id):
             raise HTTPException(400, "所选目录不属于该案件")
-        row = conn.execute(
-            """
-            INSERT INTO documents (case_id, folder_id, filename, stored_name,
-                                   size_bytes, status)
-            VALUES (%s, %s, %s, '', %s, 'processing')
-            RETURNING *
-            """,
-            (case_id, folder_id, Path(file.filename).name, len(content)),
-        ).fetchone()
-        row["folder_name"] = None
-        conn.commit()
-        doc_id = row["id"]
+        try:
+            row = conn.execute(
+                """
+                INSERT INTO documents (case_id, folder_id, filename, stored_name,
+                                       size_bytes, status, content_hash)
+                VALUES (%s, %s, %s, '', %s, 'queued', %s)
+                RETURNING *
+                """,
+                (case_id, folder_id, filename, len(content), content_hash),
+            ).fetchone()
+        except UniqueViolation:
+            # 并发或重复上传：唯一索引兜底，返回已有卷宗
+            conn.rollback()
+            existing = conn.execute(
+                f"{_DOC_SELECT} WHERE d.case_id=%s AND d.content_hash=%s",
+                (case_id, content_hash),
+            ).fetchone()
+            response.status_code = 200
+            return UploadResult.model_validate({**existing, "deduplicated": True})
 
-    # PDF 解析/bigram 建索引可能较慢，丢到后台线程，前端轮询状态
-    asyncio.get_event_loop().run_in_executor(
-        None, save_pdf_then_index, doc_id, Path(file.filename).name, content
-    )
-    return DocumentOut.model_validate(row)
+        doc_id = row["id"]
+        try:
+            stored_name = save_uploaded_file(doc_id, filename, content)
+        except OSError as exc:
+            # 文件未落盘则不入库（连接退出时回滚本次 INSERT）
+            raise HTTPException(500, f"卷宗文件保存失败，请重新上传：{exc}")
+        conn.execute(
+            "UPDATE documents SET stored_name=%s WHERE id=%s",
+            (stored_name, doc_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            f"{_DOC_SELECT} WHERE d.id=%s", (doc_id,)
+        ).fetchone()
+
+    # 文件已落盘、任务已排队（queued），后台 worker 认领后解析建索引；
+    # 即使此刻进程崩溃，重启恢复也会重新发现该 queued 任务
+    indexer.enqueue(doc_id)
+    return UploadResult.model_validate({**row, "deduplicated": False})
 
 
 @router.patch("/{doc_id}/move", response_model=DocumentOut)
@@ -148,6 +185,48 @@ def document_status(
         ).fetchone()
     if not row:
         raise HTTPException(404, "卷宗不存在")
+    return DocumentOut.model_validate(row)
+
+
+@router.post("/{doc_id}/retry", response_model=DocumentOut)
+def retry_document(
+    case_id: int, doc_id: int, role: str = Depends(current_role)
+) -> DocumentOut:
+    """索引失败的手动重试（秘书/合伙人）：重新排队，成功后旧页索引被整体替换。
+
+    状态翻转带守卫（仅 failed → queued），并发重试只有一个成功，其余 409。
+    """
+    require_manage(role)
+    with pool.connection() as conn:
+        conn.row_factory = dict_row
+        if _case_level(conn, case_id) is None:
+            raise HTTPException(404, "案件不存在")
+        cur = conn.execute(
+            """
+            UPDATE documents
+               SET status='queued', task_started_at=NULL,
+                   retry_count=retry_count+1
+             WHERE id=%s AND case_id=%s AND status='failed'
+         RETURNING id
+            """,
+            (doc_id, case_id),
+        )
+        if cur.fetchone() is None:
+            current = conn.execute(
+                "SELECT status FROM documents WHERE id=%s AND case_id=%s",
+                (doc_id, case_id),
+            ).fetchone()
+            if current is None:
+                raise HTTPException(404, "卷宗不存在")
+            label = _STATUS_LABELS.get(current["status"], current["status"])
+            raise HTTPException(
+                409, f"卷宗当前状态为「{label}」，仅「失败」状态可重试"
+            )
+        conn.commit()
+        row = conn.execute(
+            f"{_DOC_SELECT} WHERE d.id=%s", (doc_id,)
+        ).fetchone()
+    indexer.enqueue(doc_id)
     return DocumentOut.model_validate(row)
 
 

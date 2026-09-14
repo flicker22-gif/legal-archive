@@ -62,8 +62,15 @@ class DocumentOut(BaseModel):
     size_bytes: int
     status: str
     error: str | None
+    retry_count: int = 0
     uploaded_at: datetime
     indexed_at: datetime | None
+
+
+class UploadResult(DocumentOut):
+    """上传响应：deduplicated=True 表示同案件下已存在相同内容的卷宗，
+    本次未重复落盘，直接返回已有卷宗。"""
+    deduplicated: bool = False
 
 
 class MoveDocumentIn(BaseModel):

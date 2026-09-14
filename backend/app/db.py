@@ -53,9 +53,13 @@ CREATE TABLE IF NOT EXISTS documents (
     stored_name  VARCHAR(500) NOT NULL,            -- 存储路径中的文件名
     page_count   INT NOT NULL DEFAULT 0,
     size_bytes   BIGINT NOT NULL DEFAULT 0,
-    status       VARCHAR(20) NOT NULL DEFAULT 'processing',
-                                           -- processing / indexed / failed
-    error        TEXT,
+    status       VARCHAR(20) NOT NULL DEFAULT 'queued',
+                                           -- queued 排队 / processing 处理中
+                                           -- / indexed 可检索 / failed 失败
+    error        TEXT,                              -- 最近一次失败的可读原因
+    content_hash VARCHAR(64),                       -- 内容指纹 sha256（同案件内去重）
+    retry_count  INT NOT NULL DEFAULT 0,           -- 已重试次数（自动+手动）
+    task_started_at TIMESTAMPTZ,                    -- 本次索引任务认领时间（僵死判定）
     uploaded_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     indexed_at   TIMESTAMPTZ
 );
@@ -97,6 +101,16 @@ BEGIN
             FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL;
     END IF;
 END $$;
+
+-- 索引任务可恢复化迁移（旧库幂等；唯一索引必须排在 ALTER 之后，
+-- 否则旧库首启报 column does not exist）
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS task_started_at TIMESTAMPTZ;
+-- 同一案件下相同内容指纹的卷宗只保留一份（旧数据 content_hash 为 NULL，
+-- Postgres 唯一索引中 NULL 互不相等，不受影响）
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_case_hash
+    ON documents(case_id, content_hash);
 """
 
 # 新建案件时的默认目录（position 从 0 起）
